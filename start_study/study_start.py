@@ -28,8 +28,11 @@ DOCKER_CMD = ""
 CONTAINER_NAME = ""
 DB_NAME = ""
 DB_USER = ""
+DB_HOST = ""
+DB_PORT = 5432
 CMD_WINDOW_TITLE = ""
 DOCKER_READY_TIMEOUT = 180
+POSTGRES_READY_TIMEOUT = 60
 WINDOW_WAIT_TIMEOUT = 60
 POLL_INTERVAL = 0.5
 
@@ -148,8 +151,11 @@ def load_config():
     global CONTAINER_NAME
     global DB_NAME
     global DB_USER
+    global DB_HOST
+    global DB_PORT
     global CMD_WINDOW_TITLE
     global DOCKER_READY_TIMEOUT
+    global POSTGRES_READY_TIMEOUT
     global WINDOW_WAIT_TIMEOUT
     global POLL_INTERVAL
 
@@ -165,8 +171,11 @@ def load_config():
     CONTAINER_NAME = require_env(config, "CONTAINER_NAME")
     DB_NAME = require_env(config, "DB_NAME")
     DB_USER = require_env(config, "DB_USER")
+    DB_HOST = require_env(config, "DB_HOST")
+    DB_PORT = require_positive_int(config, "DB_PORT")
     CMD_WINDOW_TITLE = require_env(config, "CMD_WINDOW_TITLE")
     DOCKER_READY_TIMEOUT = require_positive_int(config, "DOCKER_READY_TIMEOUT")
+    POSTGRES_READY_TIMEOUT = require_positive_int(config, "POSTGRES_READY_TIMEOUT")
     WINDOW_WAIT_TIMEOUT = require_positive_int(config, "WINDOW_WAIT_TIMEOUT")
     POLL_INTERVAL = require_positive_float(config, "POLL_INTERVAL")
 
@@ -386,6 +395,43 @@ def ensure_container_running(container_name):
     log(f"Контейнер {container_name} запущен.")
 
 
+def wait_for_postgres_ready(timeout=POSTGRES_READY_TIMEOUT):
+    deadline = time.time() + timeout
+    last_error = ""
+
+    log("Жду готовности PostgreSQL...")
+
+    while time.time() < deadline:
+        result = run_cli(
+            [
+                DOCKER_CMD,
+                "exec",
+                CONTAINER_NAME,
+                "pg_isready",
+                "-h",
+                DB_HOST,
+                "-p",
+                str(DB_PORT),
+                "-U",
+                DB_USER,
+                "-d",
+                DB_NAME,
+            ],
+            timeout=15,
+        )
+
+        if result.returncode == 0:
+            log("PostgreSQL готов.")
+            return
+
+        last_error = (result.stderr or result.stdout or "").strip()
+        time.sleep(2)
+
+    raise TimeoutError(
+        f"PostgreSQL не стал готов за {timeout} сек. Последняя ошибка: {last_error}"
+    )
+
+
 # =========================
 # ЗАПУСК ПРОГРАММ
 # =========================
@@ -403,7 +449,21 @@ def launch_psql_cmd():
     log("Запуск cmd с psql...")
 
     docker_exec_cmd = subprocess.list2cmdline(
-        [DOCKER_CMD, "exec", "-it", CONTAINER_NAME, "psql", "-d", DB_NAME, "-U", DB_USER]
+        [
+            DOCKER_CMD,
+            "exec",
+            "-it",
+            CONTAINER_NAME,
+            "psql",
+            "-h",
+            DB_HOST,
+            "-p",
+            str(DB_PORT),
+            "-d",
+            DB_NAME,
+            "-U",
+            DB_USER,
+        ]
     )
     title_cmd = subprocess.list2cmdline(["title", CMD_WINDOW_TITLE])
     cmd_command = f"{title_cmd} && {docker_exec_cmd}"
@@ -525,6 +585,7 @@ def main():
     wait_for_docker_ready()
 
     ensure_container_running(CONTAINER_NAME)
+    wait_for_postgres_ready()
 
     cmd_window = launch_psql_cmd()
     safe_minimize(cmd_window, "cmd / psql")
