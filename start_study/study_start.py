@@ -10,7 +10,11 @@ from pywinauto import Desktop
 
 
 BASE_DIR = Path(__file__).resolve().parent
+from launcher_runtime import LaunchRegistry
+
+
 ENV_PATH = BASE_DIR / ".env"
+STATE_PATH = BASE_DIR / ".launch-state.json"
 CREATE_NEW_CONSOLE = getattr(subprocess, "CREATE_NEW_CONSOLE", 0x00000010)
 FORBIDDEN_CMD_TITLE_CHARS = set('&|<>^%"')
 
@@ -437,12 +441,12 @@ def wait_for_postgres_ready(timeout=POSTGRES_READY_TIMEOUT):
 # =========================
 def launch_nekoray():
     log("Запуск NekoRay...")
-    subprocess.Popen([NEKORAY_EXE])
+    return subprocess.Popen([NEKORAY_EXE])
 
 
 def launch_docker_desktop():
     log("Запуск Docker Desktop...")
-    subprocess.Popen([DOCKER_DESKTOP_EXE])
+    return subprocess.Popen([DOCKER_DESKTOP_EXE])
 
 
 def launch_psql_cmd():
@@ -468,7 +472,7 @@ def launch_psql_cmd():
     title_cmd = subprocess.list2cmdline(["title", CMD_WINDOW_TITLE])
     cmd_command = f"{title_cmd} && {docker_exec_cmd}"
 
-    subprocess.Popen(
+    cmd_process = subprocess.Popen(
         ["cmd.exe", "/k", cmd_command],
         creationflags=CREATE_NEW_CONSOLE,
     )
@@ -481,7 +485,7 @@ def launch_psql_cmd():
 
     # Небольшая пауза, чтобы psql успел стартовать
     time.sleep(2)
-    return cmd_window
+    return cmd_process, cmd_window
 
 
 def launch_chrome_new_window():
@@ -491,7 +495,7 @@ def launch_chrome_new_window():
         lambda info: info["class_name"] == "Chrome_WidgetWin_1"
     )
 
-    subprocess.Popen([CHROME_EXE, "--new-window", *CHROME_URLS])
+    chrome_process = subprocess.Popen([CHROME_EXE, "--new-window", *CHROME_URLS])
 
     chrome_window = wait_for_window(
         lambda info: (
@@ -503,12 +507,12 @@ def launch_chrome_new_window():
     )
 
     time.sleep(2)
-    return chrome_window
+    return chrome_process, chrome_window
 
 
 def open_pdf_in_foxit():
     log("Открытие PDF в Foxit...")
-    subprocess.Popen([FOXIT_EXE, PDF_PATH])
+    foxit_process = subprocess.Popen([FOXIT_EXE, PDF_PATH])
 
     pdf_name = Path(PDF_PATH).name.lower()
     pdf_stem = Path(PDF_PATH).stem.lower()
@@ -523,7 +527,7 @@ def open_pdf_in_foxit():
     )
 
     time.sleep(1)
-    return foxit_window
+    return foxit_process, foxit_window
 
 
 def try_minimize_docker_window():
@@ -534,8 +538,10 @@ def try_minimize_docker_window():
             description="окно Docker Desktop",
         )
         safe_minimize(docker_window, "Docker Desktop")
+        return docker_window
     except Exception as e:
         log(f"Окно Docker Desktop не нашёл для сворачивания: {e}")
+        return None
 
 
 # =========================
@@ -578,23 +584,37 @@ def main():
     enable_dpi_awareness()
     validate_paths()
 
-    launch_nekoray()
+    registry = LaunchRegistry(STATE_PATH, log)
+    registry.reset()
 
-    launch_docker_desktop()
+    nekoray_process = launch_nekoray()
+    registry.register_process("NekoRay", popen=nekoray_process, image_path=NEKORAY_EXE)
+
+    docker_process = launch_docker_desktop()
+    registry.register_process("Docker Desktop", popen=docker_process, image_path=DOCKER_DESKTOP_EXE)
     log("Жду готовности Docker...")
     wait_for_docker_ready()
 
     ensure_container_running(CONTAINER_NAME)
     wait_for_postgres_ready()
 
-    cmd_window = launch_psql_cmd()
+    cmd_process, cmd_window = launch_psql_cmd()
+    registry.register_process("cmd / psql", popen=cmd_process, image_name="cmd.exe")
+    registry.register_window("cmd / psql window", wrapper=cmd_window, image_name="cmd.exe")
     safe_minimize(cmd_window, "cmd / psql")
 
-    foxit_window = open_pdf_in_foxit()
-    chrome_window = launch_chrome_new_window()
+    foxit_process, foxit_window = open_pdf_in_foxit()
+    registry.register_process("Foxit", popen=foxit_process, image_path=FOXIT_EXE)
+    registry.register_window("Foxit window", wrapper=foxit_window, image_path=FOXIT_EXE)
+
+    chrome_process, chrome_window = launch_chrome_new_window()
+    registry.register_process("Chrome launcher", popen=chrome_process, image_path=CHROME_EXE)
+    registry.register_window("Chrome window", wrapper=chrome_window, image_path=CHROME_EXE)
 
     arrange_windows(chrome_window, foxit_window)
-    try_minimize_docker_window()
+    docker_window = try_minimize_docker_window()
+    if docker_window is not None:
+        registry.register_window("Docker Desktop window", wrapper=docker_window, image_path=DOCKER_DESKTOP_EXE)
 
     log("Готово. Сценарий завершён.")
 

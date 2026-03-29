@@ -10,7 +10,11 @@ from pywinauto import Desktop
 
 
 BASE_DIR = Path(__file__).resolve().parent
+from launcher_runtime import LaunchRegistry
+
+
 ENV_PATH = BASE_DIR / ".env"
+STATE_PATH = BASE_DIR / ".launch-state.json"
 WINDOW_WAIT_TIMEOUT = 60
 POLL_INTERVAL = 0.5
 
@@ -196,6 +200,7 @@ def list_visible_windows():
                     "handle": wrapper.handle,
                     "title": wrapper.window_text() or "",
                     "class_name": wrapper.class_name() or "",
+                    "pid": wrapper.element_info.process_id,
                 }
             )
         except Exception:
@@ -249,7 +254,7 @@ def safe_move(wrapper, x, y, width, height, name):
 
 def launch_nekoray():
     log("Запуск NekoRay...")
-    subprocess.Popen([NEKORAY_EXE])
+    return subprocess.Popen([NEKORAY_EXE])
 
 
 def launch_chrome_window(urls, description):
@@ -259,7 +264,7 @@ def launch_chrome_window(urls, description):
         lambda info: info["class_name"] == "Chrome_WidgetWin_1"
     )
 
-    subprocess.Popen([CHROME_EXE, "--new-window", *urls])
+    chrome_process = subprocess.Popen([CHROME_EXE, "--new-window", *urls])
 
     chrome_window = wait_for_window(
         lambda info: (
@@ -271,7 +276,7 @@ def launch_chrome_window(urls, description):
     )
 
     time.sleep(2)
-    return chrome_window
+    return chrome_process, chrome_window
 
 
 def arrange_windows(left_window, right_window):
@@ -308,16 +313,25 @@ def main():
     enable_dpi_awareness()
     validate_paths()
 
-    launch_nekoray()
+    registry = LaunchRegistry(STATE_PATH, log)
+    registry.reset()
 
-    left_window = launch_chrome_window(
+    nekoray_process = launch_nekoray()
+    registry.register_process("NekoRay", popen=nekoray_process, image_path=NEKORAY_EXE)
+
+    left_process, left_window = launch_chrome_window(
         LEFT_WINDOW_URLS,
         "левое окно Chrome",
     )
-    right_window = launch_chrome_window(
+    registry.register_process("Chrome left launcher", popen=left_process, image_path=CHROME_EXE)
+    registry.register_window("Chrome left window", wrapper=left_window, image_path=CHROME_EXE)
+
+    right_process, right_window = launch_chrome_window(
         RIGHT_WINDOW_URLS,
         "правое окно Chrome",
     )
+    registry.register_process("Chrome right launcher", popen=right_process, image_path=CHROME_EXE)
+    registry.register_window("Chrome right window", wrapper=right_window, image_path=CHROME_EXE)
 
     arrange_windows(left_window, right_window)
 

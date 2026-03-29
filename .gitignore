@@ -3,6 +3,8 @@ __pycache__/
 /.env
 start_study/.env
 start_day/.env
+start_day/.launch-state.json
+start_study/.launch-state.json
 .env.*
 !.env.example
 !.env.template
