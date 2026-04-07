@@ -1,4 +1,5 @@
 import ctypes
+import re
 import subprocess
 import sys
 import time
@@ -22,6 +23,9 @@ CHROME_EXE = ""
 NEKORAY_EXE = ""
 LEFT_WINDOW_URLS = []
 RIGHT_WINDOW_URLS = []
+WIFI_PRIMARY_SSID = ""
+WIFI_SECONDARY_SSID = ""
+WIFI_CONNECT_TIMEOUT = 15
 
 
 class RECT(ctypes.Structure):
@@ -132,6 +136,9 @@ def load_config():
     global NEKORAY_EXE
     global LEFT_WINDOW_URLS
     global RIGHT_WINDOW_URLS
+    global WIFI_PRIMARY_SSID
+    global WIFI_SECONDARY_SSID
+    global WIFI_CONNECT_TIMEOUT
     global WINDOW_WAIT_TIMEOUT
     global POLL_INTERVAL
 
@@ -141,6 +148,9 @@ def load_config():
     NEKORAY_EXE = require_env(config, "NEKORAY_EXE")
     LEFT_WINDOW_URLS = load_url_group(config, "LEFT_WINDOW_URL_")
     RIGHT_WINDOW_URLS = load_url_group(config, "RIGHT_WINDOW_URL_")
+    WIFI_PRIMARY_SSID = require_env(config, "WIFI_PRIMARY_SSID")
+    WIFI_SECONDARY_SSID = require_env(config, "WIFI_SECONDARY_SSID")
+    WIFI_CONNECT_TIMEOUT = require_positive_int(config, "WIFI_CONNECT_TIMEOUT")
     WINDOW_WAIT_TIMEOUT = require_positive_int(config, "WINDOW_WAIT_TIMEOUT")
     POLL_INTERVAL = require_positive_float(config, "POLL_INTERVAL")
 
@@ -153,6 +163,105 @@ def validate_paths():
     for name, path in paths:
         if not Path(path).exists():
             raise FileNotFoundError(f"{name} не найден: {path}")
+
+
+def run_command(args, timeout=15):
+    return subprocess.run(
+        args,
+        capture_output=True,
+        text=False,
+        timeout=timeout,
+    )
+
+
+def decode_command_output(data):
+    if not data:
+        return ""
+    return data.decode("latin-1", errors="ignore")
+
+
+def get_current_wifi_ssid():
+    try:
+        result = run_command(["netsh", "wlan", "show", "interfaces"], timeout=10)
+    except FileNotFoundError:
+        log("Wi-Fi check skipped: netsh is not available.")
+        return None
+    except Exception as exc:
+        log(f"Wi-Fi check failed: {exc}")
+        return None
+
+    output = decode_command_output(result.stdout)
+    for line in output.splitlines():
+        match = re.match(r"^\s*SSID\s+\d*\s*:\s*(.+?)\s*$", line, flags=re.IGNORECASE)
+        if not match:
+            continue
+
+        ssid = match.group(1).strip()
+        if ssid:
+            return ssid
+
+    return None
+
+
+def connect_to_wifi(ssid, timeout=None):
+    timeout = timeout or WIFI_CONNECT_TIMEOUT
+    log(f"Trying Wi-Fi: {ssid}")
+
+    try:
+        result = run_command(
+            ["netsh", "wlan", "connect", f"name={ssid}", f"ssid={ssid}"],
+            timeout=15,
+        )
+    except FileNotFoundError:
+        log("Wi-Fi connect skipped: netsh is not available.")
+        return False
+    except Exception as exc:
+        log(f"Wi-Fi connect failed for {ssid}: {exc}")
+        return False
+
+    command_output = decode_command_output(result.stdout or result.stderr).strip()
+    if command_output:
+        log(f"netsh connect output for {ssid}: {command_output}")
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        current_ssid = get_current_wifi_ssid()
+        if current_ssid == ssid:
+            log(f"Connected to Wi-Fi: {ssid}")
+            return True
+        time.sleep(1)
+
+    log(f"Wi-Fi did not switch to {ssid} within {timeout} seconds.")
+    return False
+
+
+def ensure_wifi_connection():
+    targets = [WIFI_PRIMARY_SSID, WIFI_SECONDARY_SSID]
+
+    current_ssid = get_current_wifi_ssid()
+    if current_ssid == WIFI_PRIMARY_SSID:
+        log(f"Wi-Fi already connected to primary network: {WIFI_PRIMARY_SSID}")
+        return
+
+    if current_ssid:
+        log(f"Current Wi-Fi before reconnect: {current_ssid}")
+    else:
+        log("Current Wi-Fi before reconnect: not connected or not detected.")
+
+    for ssid in targets:
+        current_ssid = get_current_wifi_ssid()
+        if current_ssid == ssid:
+            log(f"Wi-Fi already connected to allowed network: {ssid}")
+            return
+
+        if connect_to_wifi(ssid):
+            return
+
+    final_ssid = get_current_wifi_ssid()
+    if final_ssid:
+        log(f"Wi-Fi fallback failed. Continuing with current network: {final_ssid}")
+    else:
+        log("Wi-Fi fallback failed. Continuing without an active Wi-Fi connection.")
 
 
 def enable_dpi_awareness():
@@ -310,6 +419,7 @@ def arrange_windows(left_window, right_window):
 
 def main():
     load_config()
+    ensure_wifi_connection()
     enable_dpi_awareness()
     validate_paths()
 
