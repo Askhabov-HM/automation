@@ -45,6 +45,7 @@ DOCKER_READY_TIMEOUT = 180
 POSTGRES_READY_TIMEOUT = 60
 WINDOW_WAIT_TIMEOUT = 60
 POLL_INTERVAL = 0.5
+DEPRECATION_MESSAGE = "Deprecated: start_study is deprecated and will be removed in a future release."
 
 
 def read_env_file(path):
@@ -816,6 +817,7 @@ def arrange_windows(chrome_window, foxit_window):
 # MAIN
 # =========================
 def main():
+    log(DEPRECATION_MESSAGE)
     load_config()
     ensure_wifi_connection()
     enable_dpi_awareness()
