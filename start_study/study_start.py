@@ -39,6 +39,8 @@ CMD_WINDOW_TITLE = ""
 WIFI_PRIMARY_SSID = ""
 WIFI_SECONDARY_SSID = ""
 WIFI_CONNECT_TIMEOUT = 15
+WIFI_PARSE_WARNING_INTERVAL = 30
+LAST_WIFI_PARSE_WARNING_AT = 0
 DOCKER_READY_TIMEOUT = 180
 POSTGRES_READY_TIMEOUT = 60
 WINDOW_WAIT_TIMEOUT = 60
@@ -282,30 +284,136 @@ def run_netsh_command(args, timeout=15):
 def decode_command_output(data):
     if not data:
         return ""
-    return data.decode("latin-1", errors="ignore")
+
+    encodings = []
+    if data.startswith(b"\xff\xfe") or data.startswith(b"\xfe\xff") or b"\x00" in data:
+        encodings.extend(("utf-16", "utf-16-le", "utf-16-be"))
+    if data.startswith(b"\xef\xbb\xbf"):
+        encodings.append("utf-8-sig")
+
+    encodings.extend(("utf-8", "cp866", "cp1251", "latin-1"))
+
+    for encoding in encodings:
+        try:
+            return data.decode(encoding).replace("\x00", "")
+        except UnicodeDecodeError:
+            continue
+    return data.decode("latin-1", errors="ignore").replace("\x00", "")
 
 
-def get_current_wifi_ssid():
+def normalize_wifi_state(value):
+    normalized = (value or "").strip().lower()
+    mapping = {
+        "connected": "connected",
+        "disconnected": "disconnected",
+        "connecting": "connecting",
+        "disconnecting": "disconnecting",
+        "authenticating": "authenticating",
+        "discovering": "discovering",
+        "associating": "associating",
+        "подключено": "connected",
+        "не подключено": "disconnected",
+        "отключено": "disconnected",
+        "подключение": "connecting",
+        "отключение": "disconnecting",
+        "проверка подлинности": "authenticating",
+        "обнаружение": "discovering",
+        "связывание": "associating",
+    }
+    return mapping.get(normalized, normalized or None)
+
+
+def normalize_wifi_label(value):
+    return " ".join((value or "").strip().lower().split())
+
+
+def maybe_log_unparsed_wifi_output(output):
+    global LAST_WIFI_PARSE_WARNING_AT
+
+    now = time.time()
+    if now - LAST_WIFI_PARSE_WARNING_AT < WIFI_PARSE_WARNING_INTERVAL:
+        return
+
+    LAST_WIFI_PARSE_WARNING_AT = now
+    snippet = (output or "").strip()
+    if not snippet:
+        log("Wi-Fi parse warning: netsh returned empty output.")
+        return
+
+    log(f"Wi-Fi parse warning: could not extract state/ssid from netsh output:\n{snippet}")
+
+
+def get_wifi_status():
     try:
         result = run_netsh_command(["netsh", "wlan", "show", "interfaces"], timeout=10)
     except FileNotFoundError:
         log("Wi-Fi check skipped: netsh is not available.")
-        return None
+        return {"state": None, "ssid": None}
     except Exception as exc:
         log(f"Wi-Fi check failed: {exc}")
-        return None
+        return {"state": None, "ssid": None}
 
-    output = decode_command_output(result.stdout)
+    output = decode_command_output(result.stdout or result.stderr)
+    status = {"state": None, "ssid": None}
     for line in output.splitlines():
-        match = re.match(r"^\s*SSID\s+\d*\s*:\s*(.+?)\s*$", line, flags=re.IGNORECASE)
-        if not match:
+        if ":" not in line:
             continue
 
-        ssid = match.group(1).strip()
-        if ssid:
-            return ssid
+        label, _, raw_value = line.partition(":")
+        label = normalize_wifi_label(label)
+        value = raw_value.strip()
+        if not value:
+            continue
 
-    return None
+        if label in {"state", "состояние"}:
+            state = normalize_wifi_state(value)
+            if state:
+                status["state"] = state
+            continue
+
+        if label == "имя ssid" or label.startswith("ssid"):
+            status["ssid"] = value
+
+    if result.returncode != 0:
+        log(
+            "Wi-Fi check command returned a non-zero exit code: "
+            f"{result.returncode}. Output: {output.strip()}"
+        )
+    elif status["state"] is None and status["ssid"] is None:
+        maybe_log_unparsed_wifi_output(output)
+
+    return status
+
+
+def get_current_wifi_ssid():
+    return get_wifi_status()["ssid"]
+
+
+def summarize_wifi_status(status):
+    state = status.get("state") or "unknown"
+    ssid = status.get("ssid") or "none"
+    return f"state={state}, ssid={ssid}"
+
+
+def wait_for_allowed_wifi(targets, timeout):
+    deadline = time.time() + timeout
+    last_status = {"state": None, "ssid": None}
+    stable_reads = 0
+
+    while time.time() < deadline:
+        status = get_wifi_status()
+        last_status = status
+
+        if status.get("state") == "connected" and status.get("ssid") in targets:
+            stable_reads += 1
+            if stable_reads >= 2:
+                return status
+        else:
+            stable_reads = 0
+
+        time.sleep(1)
+
+    return last_status
 
 
 def connect_to_wifi(ssid, timeout=None):
@@ -328,33 +436,40 @@ def connect_to_wifi(ssid, timeout=None):
     if command_output:
         log(f"netsh connect output for {ssid}: {command_output}")
 
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        current_ssid = get_current_wifi_ssid()
-        if current_ssid == ssid:
-            log(f"Connected to Wi-Fi: {ssid}")
-            return True
-        time.sleep(1)
+    status = wait_for_allowed_wifi({ssid}, timeout + 3)
+    if status.get("state") == "connected" and status.get("ssid") == ssid:
+        log(f"Connected to Wi-Fi: {ssid}")
+        return True
 
-    log(f"Wi-Fi did not switch to {ssid} within {timeout} seconds.")
+    log(
+        f"Wi-Fi did not switch to {ssid} within {timeout} seconds. "
+        f"Last status: {summarize_wifi_status(status)}"
+    )
     return False
 
 
 def ensure_wifi_connection():
-    targets = [WIFI_PRIMARY_SSID, WIFI_SECONDARY_SSID]
+    targets = list(dict.fromkeys([WIFI_PRIMARY_SSID, WIFI_SECONDARY_SSID]))
+    allowed_targets = set(targets)
 
-    current_ssid = get_current_wifi_ssid()
-    if current_ssid == WIFI_PRIMARY_SSID:
-        log(f"Wi-Fi already connected to primary network: {WIFI_PRIMARY_SSID}")
+    current_status = get_wifi_status()
+    current_ssid = current_status.get("ssid")
+    if current_ssid:
+        log(f"Wi-Fi already connected. Keeping current network: {current_ssid}")
         return
 
-    if current_ssid:
-        log(f"Current Wi-Fi before reconnect: {current_ssid}")
-    else:
-        log("Current Wi-Fi before reconnect: not connected or not detected.")
+    log(
+        "Current Wi-Fi before reconnect: "
+        f"{summarize_wifi_status(current_status)}"
+    )
 
     for ssid in targets:
-        current_ssid = get_current_wifi_ssid()
+        current_status = get_wifi_status()
+        current_ssid = current_status.get("ssid")
+        if current_ssid:
+            log(f"Wi-Fi became connected during checks. Keeping network: {current_ssid}")
+            return
+
         if current_ssid == ssid:
             log(f"Wi-Fi already connected to allowed network: {ssid}")
             return
@@ -362,11 +477,23 @@ def ensure_wifi_connection():
         if connect_to_wifi(ssid):
             return
 
-    final_ssid = get_current_wifi_ssid()
-    if final_ssid:
+        grace_status = wait_for_allowed_wifi(allowed_targets, 5)
+        if grace_status.get("state") == "connected" and grace_status.get("ssid") in allowed_targets:
+            log(
+                "Wi-Fi connected during fallback grace period: "
+                f"{grace_status.get('ssid')}"
+            )
+            return
+
+    final_status = get_wifi_status()
+    final_ssid = final_status.get("ssid")
+    if final_status.get("state") == "connected" and final_ssid:
         log(f"Wi-Fi fallback failed. Continuing with current network: {final_ssid}")
     else:
-        log("Wi-Fi fallback failed. Continuing without an active Wi-Fi connection.")
+        log(
+            "Wi-Fi fallback failed. Continuing without an active Wi-Fi connection. "
+            f"Last status: {summarize_wifi_status(final_status)}"
+        )
 
 
 def list_visible_windows():
