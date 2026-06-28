@@ -1,10 +1,13 @@
+import ctypes
 import socket
 import subprocess
 import sys
 import time
 import traceback
-import webbrowser
 from pathlib import Path
+from urllib.parse import urlparse
+
+from pywinauto import Desktop
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -17,6 +20,7 @@ from launcher_runtime import LaunchRegistry
 
 DOCKER_CMD = ""
 DOCKER_DESKTOP_EXE = ""
+CHROME_EXE = ""
 COMPOSE_PROJECT_NAME = ""
 POSTGRES_SERVICE = ""
 PGADMIN_SERVICE = ""
@@ -29,10 +33,22 @@ PGADMIN_EMAIL = ""
 PGADMIN_PASSWORD = ""
 PGADMIN_PORT = 5050
 PGADMIN_URL = ""
+LEFT_WINDOW_URLS = []
 DOCKER_READY_TIMEOUT = 180
 POSTGRES_READY_TIMEOUT = 90
 PGADMIN_READY_TIMEOUT = 60
+WINDOW_WAIT_TIMEOUT = 60
 POLL_INTERVAL = 2.0
+WINDOW_POLL_INTERVAL = 0.5
+
+
+class RECT(ctypes.Structure):
+    _fields_ = [
+        ("left", ctypes.c_long),
+        ("top", ctypes.c_long),
+        ("right", ctypes.c_long),
+        ("bottom", ctypes.c_long),
+    ]
 
 
 def log(message):
@@ -100,9 +116,38 @@ def require_positive_float(config, key):
     return value
 
 
+def validate_url(url, key_name):
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError(f"{key_name} должен быть корректным http/https URL, получено: {url}")
+
+
+def load_url_group(config, prefix):
+    entries = []
+    for key, value in config.items():
+        if not key.startswith(prefix):
+            continue
+
+        suffix = key[len(prefix) :]
+        if not suffix.isdigit():
+            continue
+
+        url = value.strip()
+        validate_url(url, key)
+        entries.append((int(suffix), url))
+
+    entries.sort()
+    urls = [url for _, url in entries]
+    if not urls:
+        raise ValueError(f"В .env не найдено ни одного URL для группы {prefix}")
+
+    return urls
+
+
 def load_config():
     global DOCKER_CMD
     global DOCKER_DESKTOP_EXE
+    global CHROME_EXE
     global COMPOSE_PROJECT_NAME
     global POSTGRES_SERVICE
     global PGADMIN_SERVICE
@@ -115,6 +160,7 @@ def load_config():
     global PGADMIN_PASSWORD
     global PGADMIN_PORT
     global PGADMIN_URL
+    global LEFT_WINDOW_URLS
     global DOCKER_READY_TIMEOUT
     global POSTGRES_READY_TIMEOUT
     global PGADMIN_READY_TIMEOUT
@@ -124,6 +170,7 @@ def load_config():
 
     DOCKER_CMD = require_env(config, "DOCKER_CMD")
     DOCKER_DESKTOP_EXE = require_env(config, "DOCKER_DESKTOP_EXE")
+    CHROME_EXE = require_env(config, "CHROME_EXE")
     COMPOSE_PROJECT_NAME = require_env(config, "COMPOSE_PROJECT_NAME")
     POSTGRES_SERVICE = require_env(config, "POSTGRES_SERVICE")
     PGADMIN_SERVICE = require_env(config, "PGADMIN_SERVICE")
@@ -136,10 +183,13 @@ def load_config():
     PGADMIN_PASSWORD = require_env(config, "PGADMIN_PASSWORD")
     PGADMIN_PORT = require_positive_int(config, "PGADMIN_PORT")
     PGADMIN_URL = require_env(config, "PGADMIN_URL")
+    LEFT_WINDOW_URLS = load_url_group(config, "LEFT_WINDOW_URL_")
     DOCKER_READY_TIMEOUT = require_positive_int(config, "DOCKER_READY_TIMEOUT")
     POSTGRES_READY_TIMEOUT = require_positive_int(config, "POSTGRES_READY_TIMEOUT")
     PGADMIN_READY_TIMEOUT = require_positive_int(config, "PGADMIN_READY_TIMEOUT")
     POLL_INTERVAL = require_positive_float(config, "POLL_INTERVAL")
+
+    validate_url(PGADMIN_URL, "PGADMIN_URL")
 
 
 def validate_paths():
@@ -154,6 +204,10 @@ def validate_paths():
     if docker_cmd_path.is_absolute() and not docker_cmd_path.exists():
         raise FileNotFoundError(f"DOCKER_CMD не найден: {DOCKER_CMD}")
 
+    chrome_path = Path(CHROME_EXE)
+    if not chrome_path.exists():
+        raise FileNotFoundError(f"CHROME_EXE не найден: {CHROME_EXE}")
+
 
 def run_cli(args, timeout=30):
     return subprocess.run(
@@ -163,6 +217,111 @@ def run_cli(args, timeout=30):
         text=True,
         timeout=timeout,
     )
+
+
+def enable_dpi_awareness():
+    try:
+        ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+        return
+    except Exception:
+        pass
+
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        return
+    except Exception:
+        pass
+
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
+
+def get_work_area():
+    rect = RECT()
+    spi_getworkarea = 0x0030
+    ok = ctypes.windll.user32.SystemParametersInfoW(
+        spi_getworkarea, 0, ctypes.byref(rect), 0
+    )
+    if not ok:
+        raise RuntimeError("Не удалось получить рабочую область экрана.")
+    return rect.left, rect.top, rect.right, rect.bottom
+
+
+def list_visible_windows():
+    desktop = Desktop(backend="win32")
+    result = []
+
+    for wrapper in desktop.windows():
+        try:
+            if not wrapper.is_visible():
+                continue
+
+            result.append(
+                {
+                    "wrapper": wrapper,
+                    "handle": wrapper.handle,
+                    "title": wrapper.window_text() or "",
+                    "class_name": wrapper.class_name() or "",
+                    "pid": wrapper.element_info.process_id,
+                }
+            )
+        except Exception:
+            continue
+
+    return result
+
+
+def current_handles(filter_func=None):
+    handles = set()
+    for info in list_visible_windows():
+        try:
+            if filter_func is None or filter_func(info):
+                handles.add(info["handle"])
+        except Exception:
+            continue
+    return handles
+
+
+def wait_for_window(predicate, timeout=WINDOW_WAIT_TIMEOUT, description="окно"):
+    deadline = time.time() + timeout
+
+    while time.time() < deadline:
+        for info in list_visible_windows():
+            try:
+                if predicate(info):
+                    return info["wrapper"]
+            except Exception:
+                continue
+        time.sleep(WINDOW_POLL_INTERVAL)
+
+    raise TimeoutError(f"Не удалось дождаться: {description}")
+
+
+def safe_restore(wrapper):
+    try:
+        wrapper.restore()
+        time.sleep(0.3)
+    except Exception:
+        pass
+
+
+def safe_minimize(wrapper, name):
+    try:
+        wrapper.minimize()
+        log(f"Свернул: {name}")
+    except Exception as exc:
+        log(f"Не удалось свернуть {name}: {exc}")
+
+
+def safe_move(wrapper, x, y, width, height, name):
+    try:
+        safe_restore(wrapper)
+        wrapper.move_window(x, y, width, height, repaint=True)
+        log(f"Разместил: {name}")
+    except Exception as exc:
+        log(f"Не удалось разместить {name}: {exc}")
 
 
 def docker_is_ready():
@@ -199,12 +358,13 @@ def launch_docker_desktop_if_needed(registry):
     ready, _ = docker_is_ready()
     if ready:
         log("Docker уже запущен.")
-        return
+        return False
 
     log("Запускаю Docker Desktop...")
     process = subprocess.Popen([DOCKER_DESKTOP_EXE])
     registry.register_process("Docker Desktop", popen=process, image_path=DOCKER_DESKTOP_EXE)
     wait_for_docker_ready(DOCKER_READY_TIMEOUT)
+    return True
 
 
 def compose_command(*extra_args):
@@ -278,11 +438,68 @@ def wait_for_tcp_port(host, port, timeout, name):
     raise TimeoutError(f"{name} не стал доступен за {timeout} сек. Последняя ошибка: {last_error}")
 
 
-def open_pgadmin_in_browser():
-    log("Открываю pgAdmin в браузере...")
-    opened = webbrowser.open_new_tab(PGADMIN_URL)
-    if not opened:
-        log(f"Не удалось открыть вкладку автоматически. Открой вручную: {PGADMIN_URL}")
+def launch_chrome_window(urls, description):
+    log(f"Открываю Chrome: {description}...")
+
+    before_handles = current_handles(
+        lambda info: info["class_name"] == "Chrome_WidgetWin_1"
+    )
+
+    chrome_process = subprocess.Popen([CHROME_EXE, "--new-window", *urls])
+    chrome_window = wait_for_window(
+        lambda info: (
+            info["class_name"] == "Chrome_WidgetWin_1"
+            and info["handle"] not in before_handles
+        ),
+        timeout=45,
+        description=description,
+    )
+
+    time.sleep(2)
+    return chrome_process, chrome_window
+
+
+def arrange_windows(left_window, right_window):
+    left, top, right, bottom = get_work_area()
+    total_width = right - left
+    total_height = bottom - top
+
+    left_width = total_width // 2
+    right_width = total_width - left_width
+
+    log("Раскладываю окна Chrome...")
+
+    safe_move(
+        left_window,
+        left,
+        top,
+        left_width,
+        total_height,
+        "Chrome слева",
+    )
+
+    safe_move(
+        right_window,
+        left + left_width,
+        top,
+        right_width,
+        total_height,
+        "Chrome справа",
+    )
+
+
+def try_minimize_docker_window():
+    try:
+        docker_window = wait_for_window(
+            lambda info: "docker desktop" in info["title"].lower(),
+            timeout=20,
+            description="окно Docker Desktop",
+        )
+        safe_minimize(docker_window, "Docker Desktop")
+        return docker_window
+    except Exception as exc:
+        log(f"Окно Docker Desktop не нашёл для сворачивания: {exc}")
+        return None
 
 
 def print_credentials():
@@ -296,16 +513,36 @@ def print_credentials():
 
 def main():
     load_config()
+    enable_dpi_awareness()
     validate_paths()
 
     registry = LaunchRegistry(STATE_PATH, log)
     registry.reset()
 
-    launch_docker_desktop_if_needed(registry)
+    docker_started_by_script = launch_docker_desktop_if_needed(registry)
     compose_up()
     wait_for_postgres_ready(POSTGRES_READY_TIMEOUT)
     wait_for_tcp_port("127.0.0.1", PGADMIN_PORT, PGADMIN_READY_TIMEOUT, "pgAdmin")
-    open_pgadmin_in_browser()
+    docker_window = try_minimize_docker_window()
+    if docker_started_by_script and docker_window is not None:
+        registry.register_window("Docker Desktop window", wrapper=docker_window, image_path=DOCKER_DESKTOP_EXE)
+
+    left_process, left_window = launch_chrome_window(
+        LEFT_WINDOW_URLS,
+        "левое окно Chrome",
+    )
+    registry.register_process("Chrome left launcher", popen=left_process, image_path=CHROME_EXE)
+    registry.register_window("Chrome left window", wrapper=left_window, image_path=CHROME_EXE)
+
+    right_process, right_window = launch_chrome_window(
+        [PGADMIN_URL],
+        "правое окно Chrome с pgAdmin",
+    )
+    registry.register_process("Chrome right launcher", popen=right_process, image_path=CHROME_EXE)
+    registry.register_window("Chrome right window", wrapper=right_window, image_path=CHROME_EXE)
+
+    arrange_windows(left_window, right_window)
+
     print_credentials()
     log("Готово. Окружение поднято.")
 
