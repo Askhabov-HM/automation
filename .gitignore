@@ -4,9 +4,11 @@ __pycache__/
 start_study/.env
 start_day/.env
 start_postgres_workspace/.env
+start_job_as_BA/.env
 start_day/.launch-state.json
 start_study/.launch-state.json
 start_postgres_workspace/.launch-state.json
+start_job_as_BA/.launch-state.json
 .env.*
 !.env.example
 !.env.template
