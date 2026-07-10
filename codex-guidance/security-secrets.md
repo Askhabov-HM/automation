@@ -23,14 +23,20 @@ Minimum `.gitignore` rules:
 .env.*
 !.env.example
 !.env.template
+!.env.sample
 
 *.pem
 *.key
+*.crt
 *.p12
 *.pfx
 
 secrets.*
+secret.*
 credentials.*
+config.local.*
+*.local
+
 terraform.tfstate
 terraform.tfstate.*
 *.tfvars

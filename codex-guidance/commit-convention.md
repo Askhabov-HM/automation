@@ -32,6 +32,16 @@ Use Conventional Commits format:
   - `misc`
   - `wip`
 
+## Logical commit grouping
+
+- Prefer separate commits for implementation, tests, and documentation when each commit remains coherent and reviewable on its own.
+- Use `feat`, `fix`, or `refactor` for implementation commits.
+- Use `test` for separate test-only commits.
+- Use `docs` for separate documentation-only commits.
+- Keep implementation, tests, and documentation together when separating them would make a commit incomplete, misleading, unsafe, or unable to stand on its own.
+- Keep required configuration or database migrations with the implementation that depends on them.
+- Do not split changes inside the same file artificially when the split cannot be performed safely.
+
 ## Good examples
 
 - `feat(auth): add email login`
@@ -49,8 +59,14 @@ Use Conventional Commits format:
 
 For breaking changes:
 - use `!` after type/scope, or
-- add `BREAKING CHANGE:` in the body
+- add a `BREAKING CHANGE: <description>` footer separated from the body by a blank line
 
 Examples:
 - `feat(api)!: remove legacy v1 endpoints`
 - `refactor(config)!: rename env variables`
+
+```text
+refactor(config): rename environment variables
+
+BREAKING CHANGE: DATABASE_URL replaces DB_CONNECTION_STRING
+```
