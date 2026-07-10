@@ -1,0 +1,7 @@
+interface:
+  display_name: "Safe Commit Auto"
+  short_description: "Commit and push changes without a preview"
+  default_prompt: "Use $safe-commit-auto to create correct commits and push them without a preview."
+
+policy:
+  allow_implicit_invocation: false

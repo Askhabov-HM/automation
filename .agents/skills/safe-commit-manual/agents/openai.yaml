@@ -1,0 +1,7 @@
+interface:
+  display_name: "Safe Commit Manual"
+  short_description: "Preview commits, await approval, then push"
+  default_prompt: "Use $safe-commit-manual to preview a commit plan and wait for my approval before committing and pushing."
+
+policy:
+  allow_implicit_invocation: true
