@@ -1,0 +1,4 @@
+interface:
+  display_name: "Git Commit Lite"
+  short_description: "Quick commits for small local changes"
+  default_prompt: "Use $git-commit-lite to commit small obvious local changes."
