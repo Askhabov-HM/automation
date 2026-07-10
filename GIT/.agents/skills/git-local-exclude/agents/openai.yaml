@@ -1,0 +1,4 @@
+interface:
+  display_name: "Git Local Exclude"
+  short_description: "Add private paths to Git local exclude"
+  default_prompt: "Use $git-local-exclude to add local-only files or folders to .git/info/exclude."
