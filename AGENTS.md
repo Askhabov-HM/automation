@@ -3,6 +3,7 @@
 Follow the detailed project rules in:
 
 - `codex-guidance/commit-convention.md`
+- `codex-guidance/env-files.md`
 - `codex-guidance/versioning.md`
 - `codex-guidance/security-secrets.md`
 
@@ -11,6 +12,7 @@ Mandatory baseline:
 - Use Conventional Commits.
 - Use Semantic Versioning (`MAJOR.MINOR.PATCH`).
 - Never commit secrets, `.env` files with real values, API keys, tokens, passwords, private keys, certificates, or cloud credentials.
+- Never copy real environment values or their fragments into `.env.example`, `.env.template`, `.env.sample`, or any other configuration template.
 - Commit only placeholder templates such as `.env.example` or `.env.template`.
 
 Commit workflow:
