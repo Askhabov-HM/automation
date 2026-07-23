@@ -1,0 +1,4 @@
+interface:
+  display_name: "GitLab Task Assistant"
+  short_description: "Draft and create consistent GitLab tasks"
+  default_prompt: "Use $gitlab-task-assistant to turn my notes into a structured GitLab task and create it after I approve the preview."
