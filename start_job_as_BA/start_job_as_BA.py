@@ -40,7 +40,7 @@ def read_env_file(path):
         raise FileNotFoundError(f"Config file not found: {path}")
 
     result = {}
-    for line_number, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+    for line_number, raw_line in enumerate(path.read_text(encoding="utf-8-sig").splitlines(), start=1):
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
