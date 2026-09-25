@@ -1,0 +1,4 @@
+interface:
+  display_name: "GitLab Work Item Reader"
+  short_description: "Read complete GitLab work item details"
+  default_prompt: "Use $gitlab-work-item-reader to retrieve and summarize all available information from this GitLab work item URL."

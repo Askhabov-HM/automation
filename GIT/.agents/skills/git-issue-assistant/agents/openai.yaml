@@ -1,0 +1,4 @@
+interface:
+  display_name: "Git Issue Assistant"
+  short_description: "Draft and publish consistent GitLab issues"
+  default_prompt: "Use $git-issue-assistant to turn my notes into a structured GitLab issue and publish it after I approve the preview."
