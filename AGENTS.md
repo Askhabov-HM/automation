@@ -19,3 +19,7 @@ Commit workflow:
 
 - Use `safe-commit-manual` by default for commit and commit-and-push requests.
 - Use `safe-commit-auto` only when the user explicitly invokes `$safe-commit-auto` or explicitly requests commit and push without preview or approval.
+
+PDF documents:
+
+- For PDF authoring, read `pdf/SKILL.md`. Economy is the default; use Technical only when the user explicitly requests it. The `pdf/` directory is a self-contained, installable copy of the global `pdf-documents` skill.

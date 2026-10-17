@@ -1,0 +1,4 @@
+interface:
+  display_name: "PDF Documents"
+  short_description: "PDF: Economy по умолчанию, Technical по запросу"
+  default_prompt: "Используй $pdf-documents, чтобы создать PDF из моего содержимого в режиме Economy, если я явно не попрошу Technical."

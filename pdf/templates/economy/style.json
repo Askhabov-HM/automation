@@ -1,0 +1,9 @@
+{
+  "name": "Economy",
+  "margin": 50,
+  "body_size": 10,
+  "leading": 13.5,
+  "paragraph_gap": 6,
+  "ink": "#000000",
+  "paper": "#FFFFFF"
+}

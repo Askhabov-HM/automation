@@ -1,0 +1,5 @@
+# Preserve binary assets byte for byte when this package is transferred through Git.
+*.pdf binary
+*.ttf binary
+*.jpg binary
+*.png binary

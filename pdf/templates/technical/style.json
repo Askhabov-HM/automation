@@ -1,0 +1,13 @@
+{
+  "name": "Технический стандарт",
+  "margin": 53,
+  "body_size": 10.5,
+  "leading": 15.5,
+  "paragraph_gap": 10,
+  "ink": "#1F303C",
+  "accent": "#356778",
+  "secondary": "#536EB0",
+  "warm": "#A66D35",
+  "paper": "#FFFFFF",
+  "tint": "#EDF3F5"
+}

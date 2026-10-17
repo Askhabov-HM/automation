@@ -1,0 +1,9 @@
+.venv/
+.cache/
+__pycache__/
+*.py[cod]
+output/
+inputs/
+baselines/
+tmp/
+installed-manifest.json
